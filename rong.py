@@ -120,7 +120,7 @@ class MethodNotAllowed(ClientError):
 
 
 class ApiClient(object):
-    api_host = "http://api.cn.ronghub.com"
+    api_host = "https://api.cn.ronghub.com"
     response_type = "json"
 
     ACTION_USER_TOKEN = "/user/getToken"
