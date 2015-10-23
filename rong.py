@@ -8,12 +8,19 @@ import time
 import logging
 import random
 import hashlib
-
-from urllib import urlencode
+import sys
 import datetime
 
 from tornado.httpclient import HTTPRequest
 from tornado import gen
+
+PY2 = sys.version_info[0] == 2
+PY3 = sys.version_info[0] == 3
+
+if PY2:
+    from urllib import urlencode
+else:
+    from urllib.parse import urlencode
 
 try:
     from tornado.curl_httpclient import CurlAsyncHTTPClient as AsyncHTTPClient
@@ -236,7 +243,7 @@ class ApiClient(object):
         return self._merge_dict(
             self._make_common_signature(),
             {
-                "Content-Type": "application/x-www-form-urlencoded",
+                "content-type": "application/x-www-form-urlencoded",
             }
         )
 
