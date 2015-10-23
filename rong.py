@@ -7,9 +7,18 @@ import json
 import time
 import logging
 import random
-import datetime
 import hashlib
-import requests
+
+from urllib import urlencode
+import datetime
+
+from tornado.httpclient import HTTPRequest
+from tornado import gen
+
+try:
+    from tornado.curl_httpclient import CurlAsyncHTTPClient as AsyncHTTPClient
+except ImportError:
+    from tornado.simple_httpclient import SimpleAsyncHTTPClient as AsyncHTTPClient
 
 
 class ConnectionError(Exception):
@@ -21,9 +30,9 @@ class ConnectionError(Exception):
     def __str__(self):
         message = "Failed."
         if hasattr(self.response, 'status_code'):
-            message += " Response status: %s." % (self.response.status_code)
+            message += " Response status: %s." % self.response.code
         if hasattr(self.response, 'reason'):
-            message += " Response message: %s." % (self.response.reason)
+            message += " Response message: %s." % self.response.reason
         if self.content is not None:
             message += " Error message: " + str(self.content)
         return message
@@ -32,6 +41,7 @@ class ConnectionError(Exception):
 class Redirection(ConnectionError):
     """3xx Redirection
     """
+
     def __str__(self):
         message = super(Redirection, self).__str__()
         if self.response.get('Location'):
@@ -110,7 +120,7 @@ class MethodNotAllowed(ClientError):
 
 
 class ApiClient(object):
-    api_host = "https://api.cn.rong.io"
+    api_host = "http://api.cn.ronghub.com"
     response_type = "json"
 
     ACTION_USER_TOKEN = "/user/getToken"
@@ -140,6 +150,7 @@ class ApiClient(object):
     ACTION_CHATROOM_CREATE = "/chatroom/create"
     ACTION_CHATROOM_DESTROY = "/chatroom/destroy"
     ACTION_CHATROOM_QUERY = "/chatroom/query"
+    ACTION_CHATROOM_USER_QUERY = "/chatroom/user/query"
 
     def __init__(self, key=None, secret=None):
         self._app_key = key
@@ -167,7 +178,7 @@ class ApiClient(object):
     def _handle_response(response, content):
         """Validate HTTP response
         """
-        status = response.status_code
+        status = response.code
         if status in (301, 302, 303, 307):
             raise Redirection(response, content)
         elif 200 <= status <= 299:
@@ -225,29 +236,29 @@ class ApiClient(object):
         return self._merge_dict(
             self._make_common_signature(),
             {
-                "content-type": "application/x-www-form-urlencoded",
+                "Content-Type": "application/x-www-form-urlencoded",
             }
         )
 
+    @gen.coroutine
     def _http_call(self, url, method, **kwargs):
         """Makes a http call. Logs response information.
         """
         logging.info("Request[%s]: %s" % (method, url))
         start_time = datetime.datetime.now()
 
-        response = requests.request(method,
-                                    url,
-                                    verify=False,
-                                    **kwargs)
-
+        response = yield AsyncHTTPClient().fetch(
+            HTTPRequest(url=url,
+                        method=method,
+                        **kwargs))
         duration = datetime.datetime.now() - start_time
         logging.info("Response[%d]: %s, Duration: %s.%ss." %
-                     (response.status_code, response.reason,
+                     (response.code, response.reason,
                       duration.seconds, duration.microseconds))
+        raise gen.Return(
+            self._handle_response(response, response.body.decode("utf-8")))
 
-        return self._handle_response(response,
-                                    response.content.decode("utf-8"))
-
+    @gen.coroutine
     def call_api(self, action, params=None, **kwargs):
         """
         调用API的通用方法，有关SSL证书验证问题请参阅
@@ -259,14 +270,23 @@ class ApiClient(object):
         :param timeout: (optional) Float describing the timeout of the request.
         :return:
         """
-        return self._http_call(
+        if params is None:
+            params = {}
+
+        # 使用 urlencode 时设置 doseq 为 True，
+        # 这样 {'key1': 'value1', 'key2': ['value2', 'value3']}
+        # 就能转成 key1=value1&key2=value2&key2=value3
+        # http://stackoverflow.com/questions/2571145/urlencode-an-array-of-values
+        r = yield self._http_call(
             url=self._join_url(self.api_host, "%s.%s" % (action, self.response_type)),
             method="POST",
-            data=params,
+            body=urlencode(params, True),
             headers=self._headers(),
             **kwargs
         )
+        raise gen.Return(r)
 
+    @gen.coroutine
     def user_get_token(self, user_id, name, portrait_uri):
 
         """ 获取token
@@ -278,7 +298,7 @@ class ApiClient(object):
         :return: {"code":200, "userId":"jlk456j5", "token":"sfd9823ihufi"}
 
         """
-        return self.call_api(
+        r = yield self.call_api(
             action=self.ACTION_USER_TOKEN,
             params={
                 "userId": user_id,
@@ -286,9 +306,11 @@ class ApiClient(object):
                 "portraitUri": portrait_uri
             }
         )
+        raise gen.Return(r)
 
+    @gen.coroutine
     def user_refresh(self, user_id, name, portrait_uri):
-        return self.call_api(
+        r = yield self.call_api(
             action=self.ACTION_USER_REFRESH,
             params={
                 "userId": user_id,
@@ -296,63 +318,79 @@ class ApiClient(object):
                 "portraitUri": portrait_uri
             }
         )
+        raise gen.Return(r)
 
+    @gen.coroutine
     def user_check_online(self, user_id):
-        return self.call_api(
+        r = yield self.call_api(
             action=self.ACTION_USER_CHECKONLINE,
             params={
                 "userId": user_id
             }
         )
+        raise gen.Return(r)
 
+    @gen.coroutine
     def user_block(self, user_id, minute):
-        return self.call_api(
+        r = yield self.call_api(
             action=self.ACTION_USER_BLOCK,
             params={
                 "userId": user_id,
                 "minute": minute
             }
         )
+        raise gen.Return(r)
 
+    @gen.coroutine
     def user_unblock(self, user_id):
-        return self.call_api(
+        r = yield self.call_api(
             action=self.ACTION_USER_UNBLOCK,
             params={
                 "userId": user_id
             }
         )
+        raise gen.Return(r)
 
+    @gen.coroutine
     def user_block_query(self):
-        return self.call_api(
+        r = yield self.call_api(
             action=self.ACTION_USER_BLOCK_QUERY
         )
+        raise gen.Return(r)
 
+    @gen.coroutine
     def user_blocklist_add(self, user_id, black_user_id):
-        return self.call_api(
+        r = yield self.call_api(
             action=self.ACTION_USER_BLACKLIST_ADD,
             params={
-                'userId':user_id,
-                'blackUserId':black_user_id
+                'userId': user_id,
+                'blackUserId': black_user_id
             }
         )
+        raise gen.Return(r)
 
+    @gen.coroutine
     def user_blocklist_remove(self, user_id, black_user_id):
-        return self.call_api(
+        r = yield self.call_api(
             action=self.ACTION_USER_BLACKLIST_REMOVE,
             params={
-                'userId':user_id,
-                'blackUserId':black_user_id
+                'userId': user_id,
+                'blackUserId': black_user_id
             }
         )
+        raise gen.Return(r)
 
+    @gen.coroutine
     def user_blocklist_query(self, user_id):
-        return self.call_api(
+        r = yield self.call_api(
             action=self.ACTION_USER_BLACKLIST_QUERY,
             params={
-                'userId':user_id,
+                'userId': user_id,
             }
         )
+        raise gen.Return(r)
 
+    @gen.coroutine
     def message_publish(self, from_user_id, to_user_id,
                         object_name, content,
                         push_content=None, push_data=None):
@@ -369,23 +407,28 @@ class ApiClient(object):
         :param push_data:针对 iOS 平台，Push 通知附加的 payload 字段，字段名为 appData。(可选)
         :return:{"code":200}
         """
+        params = [
+            ("fromUserId", from_user_id),
+            ("objectName", object_name),
+            ("content", content),
+            ("pushContent", push_content if push_content is not None else ""),
+            ("pushData", push_data if push_data is not None else "")
+        ]
+        if not isinstance(to_user_id, list):
+            to_user_id = [to_user_id]
 
-        return self.call_api(
+        for user in to_user_id:
+            params.append(("toUserId", user))
+        r = yield self.call_api(
             action=self.ACTION_MESSAGE_PUBLISH,
-            params={
-                "fromUserId": from_user_id,
-                "toUserId": to_user_id,
-                "objectName": object_name,
-                "content": content,
-                "pushContent": push_content if push_content is not None else "",
-                "pushData": push_data if push_data is not None else ""
-            }
+            params=params
         )
+        raise gen.Return(r)
 
+    @gen.coroutine
     def message_system_publish(self, from_user_id, to_user_id,
                                object_name, content,
                                push_content=None, push_data=None):
-
         """发送系统消息
         http://docs.rongcloud.cn/server.html#_发送系统消息_方法
 
@@ -397,21 +440,24 @@ class ApiClient(object):
         :param push_data:针对 iOS 平台，Push 通知附加的 payload 字段，字段名为 appData。(可选)
         :return:{"code":200}
         """
-        return self.call_api(
-            action=self.ACTION_MESSAGE_SYSTEM_PUBLISH,
-            params={
-                "fromUserId": from_user_id,
-                "toUserId": to_user_id,
-                "objectName": object_name,
-                "content": content,
-                "pushContent": push_content if push_content is not None else '',
-                "pushData": push_data if push_data is not None else ''
-            }
-        )
+        params = [
+            ("fromUserId", from_user_id),
+            ("objectName", object_name),
+            ("content", content),
+            ("pushContent", push_content if push_content is not None else ''),
+            ("pushData", push_data if push_data is not None else '')
+        ]
+        if not isinstance(to_user_id, list):
+            to_user_id = [to_user_id]
+        for user in to_user_id:
+            params.append(("toUserId", user))
 
+        r = yield self.call_api(action=self.ACTION_MESSAGE_SYSTEM_PUBLISH, params=params)
+        raise gen.Return(r)
+
+    @gen.coroutine
     def message_group_publish(self, from_user_id, to_group_id, object_name,
                               content, push_content=None, push_data=None):
-
         """以一个用户身份向群组发送消息
         http://docs.rongcloud.cn/server.html#_发送群组消息_方法
 
@@ -423,23 +469,30 @@ class ApiClient(object):
         :param push_data:针对 iOS 平台，Push 通知附加的 payload 字段，字段名为 appData。(可选)
         :return:{"code":200}
         """
-        return self.call_api(
-            action=self.ACTION_MESSAGE_GROUP_PUBLISH,
-            params={
-                "fromUserId": from_user_id,
-                "toGroupId": to_group_id,
-                "objectName": object_name,
-                "content": content,
-                "pushContent": push_content if push_content is not None else '',
-                "pushData": push_data if push_data is not None else ''
-            }
-        )
+        params = [
+            ("fromUserId", from_user_id),
+            ("objectName", object_name),
+            ("content", content),
+            ("pushContent", push_content if push_content is not None else ''),
+            ("pushData", push_data if push_data is not None else '')
+        ]
+        if not isinstance(to_group_id, list):
+            to_group_id = [to_group_id]
+        for group in to_group_id:
+            params.append(("toGroupId", group))
 
+        r = yield self.call_api(
+            action=self.ACTION_MESSAGE_GROUP_PUBLISH,
+            params=params
+        )
+        raise gen.Return(r)
+
+    @gen.coroutine
     def message_chatroom_publish(self, from_user_id,
                                  to_chatroom_id,
                                  object_name,
                                  content):
-        return self.call_api(
+        r = yield self.call_api(
             action=self.ACTION_MESSAGE_CHATROOM_PUBLISH,
             params={
                 "fromUserId": from_user_id,
@@ -448,44 +501,54 @@ class ApiClient(object):
                 "content": content
             }
         )
+        raise gen.Return(r)
 
+    @gen.coroutine
     def message_history(self, date):
-        return self.call_api(
+        r = yield self.call_api(
             action=self.ACTION_MESSAGE_HISTORY,
             params={
                 "date": date,
             }
         )
+        raise gen.Return(r)
 
+    @gen.coroutine
     def group_sync(self, user_id, groups):
-        group_mapping = {"group[%s]" % k:v for k, v in groups.items()}
+        group_mapping = {"group[%s]" % k: v for k, v in groups.items()}
         group_mapping.setdefault("userId", user_id)
 
-        return self.call_api(action=self.ACTION_GROUP_SYNC, params=group_mapping)
+        r = yield self.call_api(action=self.ACTION_GROUP_SYNC, params=group_mapping)
+        raise gen.Return(r)
 
+    @gen.coroutine
     def group_create(self, user_id_list, group_id, group_name):
-
-        return self.call_api(action=self.ACTION_GROUP_CREATE, params={
-            "userId":user_id_list,
-            "groupId":group_id,
-            "groupName":group_name
+        r = yield self.call_api(action=self.ACTION_GROUP_CREATE, params={
+            "userId": user_id_list,
+            "groupId": group_id,
+            "groupName": group_name
         })
+        raise gen.Return(r)
 
+    @gen.coroutine
     def group_join(self, user_id_list, group_id, group_name):
-        return self.call_api(action=self.ACTION_GROUP_JOIN, params={
-            "userId":user_id_list,
-            "groupId":group_id,
-            "groupName":group_name
+        r = yield self.call_api(action=self.ACTION_GROUP_JOIN, params={
+            "userId": user_id_list,
+            "groupId": group_id,
+            "groupName": group_name
         })
+        raise gen.Return(r)
 
+    @gen.coroutine
     def group_quit(self, user_id_list, group_id):
-        return self.call_api(action=self.ACTION_GROUP_QUIT, params={
+        r = yield self.call_api(action=self.ACTION_GROUP_QUIT, params={
             "userId": user_id_list,
             "groupId": group_id
         })
+        raise gen.Return(r)
 
+    @gen.coroutine
     def group_dismiss(self, user_id, group_id):
-
         """将该群解散，所有用户都无法再接收该群的消息。
         http://docs.rongcloud.cn/server.html#_解散群组_方法
 
@@ -494,30 +557,34 @@ class ApiClient(object):
         :param group_id:要解散的群 Id。
         :return:{"code":200}
         """
-        return self.call_api(action=self.ACTION_GROUP_DISMISS, params={
-            "userId":user_id,
-            "groupId":group_id,
+        r = yield self.call_api(action=self.ACTION_GROUP_DISMISS, params={
+            "userId": user_id,
+            "groupId": group_id,
         })
+        raise gen.Return(r)
 
+    @gen.coroutine
     def group_refresh(self, group_id, group_name):
-        return self.call_api(action=self.ACTION_GROUP_REFRESH, params={
+        r = yield self.call_api(action=self.ACTION_GROUP_REFRESH, params={
             "groupId": group_id,
             "groupName": group_name
 
         })
+        raise gen.Return(r)
 
+    @gen.coroutine
     def chatroom_create(self, chatrooms):
-
         """创建聊天室 方法
         http://docs.rongcloud.cn/server.html#_创建聊天室_方法
         :param chatrooms: {'r001':'room1'} id:要创建的聊天室的id；name:要创建的聊天室的name
         :return:{"code":200}
         """
-        chatroom_mapping = {'chatroom[%s]' % k:v for k, v in chatrooms.items()}
-        return self.call_api(action=self.ACTION_CHATROOM_CREATE, params=chatroom_mapping)
+        chatroom_mapping = {'chatroom[%s]' % k: v for k, v in chatrooms.items()}
+        r = yield self.call_api(action=self.ACTION_CHATROOM_CREATE, params=chatroom_mapping)
+        raise gen.Return(r)
 
+    @gen.coroutine
     def chatroom_destroy(self, chatroom_id_list=None):
-
         """销毁聊天室 方法
         当提交参数chatroomId多个时表示销毁多个聊天室
 
@@ -526,14 +593,15 @@ class ApiClient(object):
         :return:{"code":200}
 
         """
-        params={
-            "chatroomId":chatroom_id_list
+        params = {
+            "chatroomId": chatroom_id_list
         } if chatroom_id_list is not None else {}
 
-        return self.call_api(action=self.ACTION_CHATROOM_DESTROY, params=params)
+        r = yield self.call_api(action=self.ACTION_CHATROOM_DESTROY, params=params)
+        raise gen.Return(r)
 
+    @gen.coroutine
     def chatroom_query(self, chatroom_id_list=None):
-
         """查询聊天室信息 方法
 
         http://docs.rongcloud.cn/server.html#_查询聊天室信息_方法
@@ -542,8 +610,24 @@ class ApiClient(object):
         :return:{"code":200,"chatRooms":[{"chatroomId":"id1001","name":"name1","time":"2014-01-01 1:1:1"},{"chatroomId":"id1002","name":"name2","time":"2014-01-01 1:1:2"}]}
         """
 
-        params={
-            "chatroomId":chatroom_id_list
+        params = {
+            "chatroomId": chatroom_id_list
         } if chatroom_id_list is not None else {}
 
-        return self.call_api(action=self.ACTION_CHATROOM_QUERY, params=params)
+        r = yield self.call_api(action=self.ACTION_CHATROOM_QUERY, params=params)
+        raise gen.Return(r)
+
+    @gen.coroutine
+    def chatroom_user_query(self, chatroom_id):
+        """查询聊天室内用户 方法
+
+        http://docs.rongcloud.cn/server.html#_查询聊天室内用户_方法
+
+        :param chatroom_id:要查询的聊天室id
+        :return:{"code":200,"users":[{"id":"uid1"},{"id":"uid2"}]}
+        """
+        r = yield self.call_api(action=self.ACTION_CHATROOM_USER_QUERY, params={
+            "chatroomId": chatroom_id
+        })
+
+        raise gen.Return(r)

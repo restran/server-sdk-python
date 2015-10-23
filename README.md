@@ -3,15 +3,16 @@ server-sdk-python
 
 Rong Cloud Server SDK in Python.
 
+# Tornado-aysnc-request
+
+使用 Tornado 的异步 HTTP 请求工具类 CurlAsyncHTTPClient 替代 requests，使用 Tornado 开发后台 API 时可以使用。
+
+
 # 更新说明
 
 * 20150206
 * 去掉可能会导致SSL验证失败的代码
 * 更改环境变量名称，老的环境变量名称在某些操作系统中无法被识别
-
-
-# 依赖说明
-* 本sdk 依赖于requests
 
 # 使用说明
 
