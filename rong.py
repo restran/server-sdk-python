@@ -13,14 +13,7 @@ import datetime
 
 from tornado.httpclient import HTTPRequest
 from tornado import gen
-
-PY2 = sys.version_info[0] == 2
-PY3 = sys.version_info[0] == 3
-
-if PY2:
-    from urllib import urlencode
-else:
-    from urllib.parse import urlencode
+from tornado.httputil import urlencode
 
 try:
     from tornado.curl_httpclient import CurlAsyncHTTPClient as AsyncHTTPClient
